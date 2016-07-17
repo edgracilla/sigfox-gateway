@@ -1,0 +1,18 @@
+{
+  "data_path": {
+    "type": "String",
+    "label": "Data Path",
+    "default": "/data",
+    "help": "(Optional) The path where SIGFOX device data data is POSTed. Default: /data"
+  },
+  "username": {
+    "type": "String",
+    "label": "Username",
+    "help": "(Optional) HTTP Basic username to use for authenticating incoming connections."
+  },
+  "password": {
+    "type": "Password",
+    "label": "Password",
+    "help": "(Optional) HTTP Basic password to use for authenticating incoming connections."
+  }
+}
