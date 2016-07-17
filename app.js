@@ -37,8 +37,7 @@ platform.once('ready', function (options) {
 	var app = express();
 
 	app.use(bodyParser.json());
-
-	// For security
+	
 	app.disable('x-powered-by');
 	app.use(helmet.xssFilter({setOnOldIE: true}));
 	app.use(helmet.frameguard('deny'));
