@@ -1,5 +1,5 @@
 {
-  "data_path": {
+  "dataPath": {
     "type": "String",
     "label": "Data Path",
     "default": "/data",

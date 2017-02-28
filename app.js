@@ -1,136 +1,125 @@
-'use strict';
+'use strict'
 
-var async    = require('async'),
-	platform = require('./platform'),
-	isEmpty  = require('lodash.isempty'),
-	server;
+const reekoh = require('reekoh')
+const plugin = new reekoh.plugins.Gateway()
 
-platform.once('close', function () {
-	let d = require('domain').create();
+const isEmpty = require('lodash.isempty')
 
-	d.once('error', function (error) {
-		console.error(error);
-		platform.handleException(error);
-		platform.notifyClose();
-		d.exit();
-	});
+let server = null
 
-	d.run(function () {
-		server.close(() => {
-			server.removeAllListeners();
-			platform.notifyClose();
-			d.exit();
-		});
-	});
-});
+plugin.once('ready', () => {
+  let hpp = require('hpp')
+  let helmet = require('helmet')
+  let config = require('./config.json')
+  let express = require('express')
+  let bodyParser = require('body-parser')
 
-platform.once('ready', function (options) {
-	let hpp        = require('hpp'),
-		helmet     = require('helmet'),
-		config     = require('./config.json'),
-		express    = require('express'),
-		bodyParser = require('body-parser');
+  let options = plugin.config
 
-	if (isEmpty(options.data_path))
-		options.data_path = config.data_path.default;
+  if (isEmpty(options.dataPath)) {
+    options.dataPath = config.dataPath
+  }
 
-	var app = express();
+  let app = express()
 
-	app.use(bodyParser.json());
-	
-	app.disable('x-powered-by');
-	app.use(helmet.xssFilter({setOnOldIE: true}));
-	app.use(helmet.frameguard('deny'));
-	app.use(helmet.ieNoOpen());
-	app.use(helmet.noSniff());
-	app.use(hpp());
+  app.use(bodyParser.json())
 
-	if (!isEmpty(options.username)) {
-		let basicAuth = require('basic-auth');
+  app.disable('x-powered-by')
+  app.use(helmet.xssFilter({setOnOldIE: true}))
+  app.use(helmet.frameguard('deny'))
+  app.use(helmet.ieNoOpen())
+  app.use(helmet.noSniff())
+  app.use(hpp())
 
-		app.use((req, res, next) => {
-			let unauthorized = (res) => {
-				res.set('WWW-Authenticate', 'Basic realm=Authorization Required');
-				return res.sendStatus(401);
-			};
+  if (!isEmpty(options.username)) {
+    let basicAuth = require('basic-auth')
 
-			let user = basicAuth(req);
+    app.use((req, res, next) => {
+      let unauthorized = (res) => {
+        res.set('WWW-Authenticate', 'Basic realm=Authorization Required')
+        return res.sendStatus(401)
+      }
 
-			if (isEmpty(user))
-				return unauthorized(res);
-			if (user.name === options.username && isEmpty(options.password))
-				return next();
-			if (user.name === options.username && user.pass === options.password)
-				return next();
-			else
-				return unauthorized(res);
-		});
-	}
+      let user = basicAuth(req)
 
-	app.post((options.data_path.startsWith('/')) ? options.data_path : `/${options.data_path}`, (req, res) => {
-		let data = req.body;
+      if (isEmpty(user)) {
+        return unauthorized(res)
+      }
+      if (user.name === options.username && isEmpty(options.password)) { return next() }
+      if (user.name === options.username && user.pass === options.password) {
+        return next()
+      } else {
+        return unauthorized(res)
+      }
+    })
+  }
 
-		res.set('Content-Type', 'text/plain');
+  app.post((options.dataPath.startsWith('/')) ? options.dataPath : `/${options.dataPath}`, (req, res) => {
+    let data = req.body
 
-		res.status(200).send(`Data Received. Device ID: ${data.device}. Data: ${JSON.stringify(data)}\n`);
+    res.set('Content-Type', 'text/plain')
+    res.status(200).send(`Data Received. Device ID: ${data.device}. Data: ${JSON.stringify(data)}\n`)
 
-		if (isEmpty(data) || isEmpty(data.device))
-			platform.handleException(new Error('Invalid data sent. Data must be a valid JSON String with at least a "device" field which corresponds to a registered Device ID.'));
+    if (isEmpty(data) || isEmpty(data.device)) {
+      plugin.logException(new Error('Invalid data sent. Data must be a valid JSON String with at least a "device" field which corresponds to a registered Device ID.'))
+    }
 
-		platform.requestDeviceInfo(data.device, (error, requestId) => {
-			platform.once(requestId, (deviceInfo) => {
-				if (isEmpty(deviceInfo)) {
-					platform.log(JSON.stringify({
-						title: 'SIGFOX Gateway - Access Denied. Unauthorized Device',
-						device: data.device
-					}));
-				}
+    plugin.requestDeviceInfo(data.device).then((deviceInfo) => {
+      if (isEmpty(deviceInfo)) {
+        return plugin.log(JSON.stringify({
+          title: 'SIGFOX Gateway - Access Denied. Unauthorized Device',
+          device: data.device
+        }))
+      }
 
-				platform.processData(data.device, JSON.stringify(data));
+      return plugin.pipe(data).then(() => {
+        plugin.log(JSON.stringify({
+          title: 'SIGFOX Gateway - Data Received',
+          device: data.device,
+          data: data
+        }))
 
-				platform.log(JSON.stringify({
-					title: 'SIGFOX Data Received.',
-					device: data.device,
-					data: data
-				}));
-			});
-		});
-	});
+        plugin.emit('data.ok')
+      })
+    }).catch((err) => {
+      plugin.logException(err)
+      console.error(err)
+    })
+  })
 
-	app.use((error, req, res, next) => {
-		platform.handleException(error);
+  app.use((error, req, res, next) => {
+    res.set('Content-Type', 'text/plain')
+    res.status(500).send('An unexpected error has occurred. Please contact support.\n')
+    plugin.logException(error)
+  })
 
-		res.set('Content-Type', 'text/plain');
+  app.use((req, res) => {
+    res.set('Content-Type', 'text/plain')
+    res.status(404).send(`Invalid Path. ${req.originalUrl} Not Found\n`)
+  })
 
-		res.status(500).send('An unexpected error has occurred. Please contact support.\n');
-	});
+  server = require('http').Server(app)
 
-	app.use((req, res) => {
-		res.set('Content-Type', 'text/plain');
+  server.once('error', function (error) {
+    console.error('SIGFOX Gateway Error', error)
+    plugin.logException(error)
 
-		res.status(404).send(`Invalid Path. ${req.originalUrl} Not Found\n`);
-	});
+    setTimeout(() => {
+      server.close(() => {
+        server.removeAllListeners()
+        process.exit()
+      })
+    }, 5000)
+  })
 
-	server = require('http').Server(app);
+  server.once('close', () => {
+    plugin.log(`SIGFOX Gateway closed on port ${options.port}`)
+  })
 
-	server.once('error', function (error) {
-		console.error('SIGFOX Gateway Error', error);
-		platform.handleException(error);
+  server.listen(options.port, () => {
+    plugin.log(`SIGFOX Gateway has been initialized on port ${options.port}`)
+    plugin.emit('init')
+  })
+})
 
-		setTimeout(() => {
-			server.close(() => {
-				server.removeAllListeners();
-				process.exit();
-			});
-		}, 5000);
-	});
-
-	server.once('close', () => {
-		platform.log(`SIGFOX Gateway closed on port ${options.port}`);
-	});
-
-	server.listen(options.port, () => {
-		platform.notifyReady();
-		platform.log(`SIGFOX Gateway has been initialized on port ${options.port}`);
-	});
-});
+module.exports = plugin

@@ -1,84 +1,103 @@
-'use strict';
+/* global describe, it, after, before */
+'use strict'
 
-const PORT       = 8080,
-	  DEVICE_ID1 = '567827489028375',
-	  DEVICE_ID2 = '567827489028376';
+const async = require('async')
+const should = require('should')
+const request = require('request')
 
-var cp      = require('child_process'),
-	assert  = require('assert'),
-	request = require('request'),
-	gateway;
+const PORT = 8182
+const PLUGIN_ID = 'demo.gateway'
+const BROKER = 'amqp://guest:guest@127.0.0.1/'
+const OUTPUT_PIPES = 'demo.outpipe1,demo.outpipe2'
+const COMMAND_RELAYS = 'demo.relay1,demo.relay2'
 
-describe('HTTP Gateway', function () {
-	this.slow(5000);
+const Broker = require('../node_modules/reekoh/lib/broker.lib')
 
-	after('terminate child process', function (done) {
-		this.timeout(5000);
+let conf = {
+  port: PORT,
+  dataPath: '/data'
+}
 
-		gateway.send({
-			type: 'close'
-		});
+let _app = null
+let _broker = null
 
-		setTimeout(function () {
-			gateway.kill('SIGKILL');
-			done();
-		}, 4000);
-	});
+describe('Sigfox Gateway', () => {
+  before('init', () => {
+    process.env.BROKER = BROKER
+    process.env.PLUGIN_ID = PLUGIN_ID
+    process.env.OUTPUT_PIPES = OUTPUT_PIPES
+    process.env.COMMAND_RELAYS = COMMAND_RELAYS
+    process.env.CONFIG = JSON.stringify(conf)
 
-	describe('#spawn', function () {
-		it('should spawn a child process', function () {
-			assert.ok(gateway = cp.fork(process.cwd()), 'Child process not spawned.');
-		});
-	});
+    _broker = new Broker()
+  })
 
-	describe('#handShake', function () {
-		it('should notify the parent process when ready within 5 seconds', function (done) {
-			this.timeout(5000);
+  after('terminate', function () {
 
-			gateway.on('message', function (message) {
-				if (message.type === 'ready')
-					done();
-				else if (message.type === 'requestdeviceinfo') {
-					if (message.data.deviceId === DEVICE_ID1 || message.data.deviceId === DEVICE_ID2) {
-						gateway.send({
-							type: message.data.requestId,
-							data: {
-								_id: message.data.deviceId
-							}
-						});
-					}
-				}
-			});
+  })
 
-			gateway.send({
-				type: 'ready',
-				data: {
-					options: {
-						port: PORT
-					}
-				}
-			}, function (error) {
-				assert.ifError(error);
-			});
-		});
-	});
+  describe('#start', function () {
+    it('should start the app', function (done) {
+      this.timeout(10000)
+      _app = require('../app')
+      _app.once('init', done)
+    })
+  })
 
-	describe('#data', function () {
-		it('should process the data', function (done) {
-			this.timeout(5000);
+  describe('#test RPC preparation', () => {
+    it('should connect to broker', (done) => {
+      _broker.connect(BROKER).then(() => {
+        return done() || null
+      }).catch((err) => {
+        done(err)
+      })
+    })
 
-			request.post({
-				url: `http://localhost:${PORT}/data`,
-				body: JSON.stringify({device: '567827489028375', data: 'test data'}),
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}, function (error, response, body) {
-				assert.ifError(error);
-				assert.equal(200, response.statusCode);
-				assert.ok(body.startsWith('Data Received.'));
-				done();
-			});
-		});
-	});
-});
+    it('should spawn temporary RPC server', (done) => {
+      // if request arrives this proc will be called
+      let sampleServerProcedure = (msg) => {
+        // console.log(msg.content.toString('utf8'))
+        return new Promise((resolve, reject) => {
+          async.waterfall([
+            async.constant(msg.content.toString('utf8')),
+            async.asyncify(JSON.parse)
+          ], (err, parsed) => {
+            if (err) return reject(err)
+            parsed.foo = 'bar'
+            resolve(JSON.stringify(parsed))
+          })
+        })
+      }
+
+      _broker.createRPC('server', 'deviceinfo').then((queue) => {
+        return queue.serverConsume(sampleServerProcedure)
+      }).then(() => {
+        // Awaiting RPC requests
+        done()
+      }).catch((err) => {
+        done(err)
+      })
+    })
+  })
+
+  describe('#data', function () {
+    it('should process the data', function (done) {
+      this.timeout(10000)
+
+      request.post({
+        url: `http://localhost:${PORT}/data`,
+        body: JSON.stringify({device: '567827489028375', data: 'test data'}),
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      }, function (error, response, body) {
+        should.ifError(error)
+        should.equal(200, response.statusCode)
+        should.ok(body.startsWith('Data Received.'))
+        done()
+      })
+
+      _app.on('data.ok', done)
+    })
+  })
+})
