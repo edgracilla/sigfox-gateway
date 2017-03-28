@@ -1,0 +1,42 @@
+apiVersion: 1.0.0
+kind: Plugin
+metadata:
+  name: SIGFOX Gateway
+  description: SIGFOX Gateway Plugin for the Reekoh IoT Platform
+  documentation: README.md
+  icon: asset/icon/reekoh200x200.png
+  signupLink: https://myservice.com/signup # ??
+  type: Storage
+  price: 0
+  tags:
+    - gateway
+    - sigfox
+  config:
+    dataPath:
+      label: Data Path
+      type: String
+      maxLength: 1000
+      required: false
+      default: /data
+      help: "(Optional) The path where SIGFOX device data data is POSTed. Default: /data."
+    username:
+      label: Username
+      type: String
+      maxLength: 1000
+      required: false
+      help: "(Optional) HTTP Basic username to use for authenticating incoming connections."
+    password:
+      label: Password
+      type: Password
+      maxLength: 1000
+      required: false
+      help: "(Optional) HTTP Basic password to use for authenticating incoming connections."
+
+  loadBalancing:
+    method: http
+    enableSticky: true
+
+  release:
+    version: 1.0.0
+    notes: path/to/RELEASENOTESv1.0.0.md # ??
+    image: path/to/docker/image # ??
